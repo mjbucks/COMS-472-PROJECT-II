@@ -61,66 +61,95 @@ def find_escape_paths(world, pos, pursuer, depth=3):
     
     return escape_paths
 
+def predict_spike_movement(world, spike_pos, tom_pos, jerry_pos):
+    """
+    Simplified prediction of Spike's next move based on immediate threats and opportunities.
+    """
+    possible_moves = get_neighbors(spike_pos, world)
+    if not possible_moves:
+        return [spike_pos]
+    
+    # Score each possible move
+    move_scores = []
+    for move in possible_moves:
+        score = 0
+        # Moving away from Tom is good
+        if manhattan_distance(move, tom_pos) > manhattan_distance(spike_pos, tom_pos):
+            score += 2
+        # Moving toward Jerry is good
+        if manhattan_distance(move, jerry_pos) < manhattan_distance(spike_pos, jerry_pos):
+            score += 1
+        move_scores.append((score, move))
+    
+    # Sort moves by score and return top 2
+    move_scores.sort(reverse=True, key=lambda x: x[0])
+    return [move for _, move in move_scores[:2]]
+
+def find_interception_point(world, jerry_pos, spike_pos, tom_pos):
+    """
+    Simplified interception point calculation focusing on immediate tactical advantage.
+    Only used when Tom is far enough away to make interception safe.
+    """
+    predicted_moves = predict_spike_movement(world, spike_pos, tom_pos, jerry_pos)
+    
+    if len(predicted_moves) == 1 and predicted_moves[0] == spike_pos:
+        return spike_pos
+    
+    best_interception = None
+    best_score = float('-inf')
+    
+    jerry_moves = get_neighbors(jerry_pos, world)
+    if not jerry_moves:
+        return jerry_pos
+    
+    for move in jerry_moves:
+        score = 0
+        # Score based on distance to Spike's predicted moves
+        min_dist_to_spike = min(manhattan_distance(move, spike_move) for spike_move in predicted_moves)
+        score -= min_dist_to_spike
+        
+        # Score based on distance from Tom
+        dist_from_tom = manhattan_distance(move, tom_pos)
+        score += dist_from_tom * 0.5
+        
+        if score > best_score:
+            best_score = score
+            best_interception = move
+    
+    return best_interception or jerry_pos
+
 def calculate_heuristic(current, pursued, pursuer, world):
     """
-    Enhanced heuristic that considers:
-    1. Distance to target (pursued)
-    2. Distance from pursuer
-    3. Safety margin from pursuer
-    4. Escape routes availability
-    5. Strategic positioning
+    Enhanced heuristic that considers safety distance from Tom.
     """
-    # Base distances
     dist_to_target = manhattan_distance(current, pursued)
     dist_from_pursuer = manhattan_distance(current, pursuer)
     
     # Safety factors
-    SAFE_DISTANCE = 4  # Increased safe distance
+    SAFE_DISTANCE = 4  # Minimum safe distance from Tom
     DANGER_DISTANCE = 2  # Distance at which we consider immediate danger
     
     # Calculate safety score
     if dist_from_pursuer < DANGER_DISTANCE:
-        safety_penalty = 10  # High penalty for being very close to pursuer
-    else:
-        safety_penalty = max(0, SAFE_DISTANCE - dist_from_pursuer) * 2
+        return float('inf')  # Avoid immediate danger
     
-    # Find escape routes
-    escape_paths = find_escape_paths(world, current, pursuer)
-    escape_score = len(escape_paths) * 0.5  # Bonus for having escape routes
+    # Heavily penalize being too close to Tom
+    safety_penalty = max(0, SAFE_DISTANCE - dist_from_pursuer) * 3
     
-    # Strategic positioning
-    # Prefer positions that put us between target and pursuer when safe
-    strategic_score = 0
-    if dist_from_pursuer > SAFE_DISTANCE:
-        target_to_pursuer = manhattan_distance(pursued, pursuer)
-        our_to_target = manhattan_distance(current, pursued)
-        our_to_pursuer = dist_from_pursuer
-        if our_to_target + our_to_pursuer < target_to_pursuer:
-            strategic_score = 2  # Bonus for good strategic position
-    
-    # Combine all factors
-    return float(dist_to_target * 0.7 -  # Minimize distance to target
-            dist_from_pursuer * 0.8 +  # Maximize distance from pursuer
-            safety_penalty * 1.2 -  # Avoid danger
-            escape_score * 0.6 +  # Encourage positions with escape routes
-            strategic_score)  # Encourage strategic positioning
+    return float(dist_to_target - dist_from_pursuer * 1.2 - safety_penalty)
 
 def a_star_search(world, start, pursued, pursuer):
     """
-    Enhanced A* search with sophisticated heuristic and tactical considerations
+    Optimized A* search with safety-aware heuristic.
     """
     start_node = Node(start, 0, calculate_heuristic(start, pursued, pursuer, world))
     open_list = [start_node]
     closed_set = set()
-    node_dict = {start: start_node}  # For efficient node lookup
+    node_dict = {start: start_node}
     
-    while open_list:
-        # Find node with minimum f_cost
-        min_idx = 0
-        for i in range(1, len(open_list)):
-            if open_list[i].f_cost < open_list[min_idx].f_cost:
-                min_idx = i
-        current = open_list.pop(min_idx)
+    while open_list and len(closed_set) < 100:  # Limit search depth
+        current = min(open_list, key=lambda x: x.f_cost)
+        open_list.remove(current)
         
         if current.pos == pursued:
             path = []
@@ -150,79 +179,68 @@ class PlannerAgent:
     last_positions = []
     cycle_count = 0
     max_cycle_count = 3
+    last_spike_pos = None
+    last_tom_pos = None
     
     def __init__(self):
         pass
     
     def plan_action(world, current, pursued, pursuer):
         """
-        Computes an optimal action to take from the current position to capture the pursued while evading the pursuer
+        Enhanced action planning with safety-aware decision making.
         """
-        # Convert numpy arrays to tuples for the search
         current_pos = (int(current[0]), int(current[1]))
         pursued_pos = (int(pursued[0]), int(pursued[1]))
         pursuer_pos = (int(pursuer[0]), int(pursuer[1]))
         
-        # Get the optimal path
-        path = a_star_search(world, current_pos, pursued_pos, pursuer_pos)
+        # Calculate distances
+        dist_to_spike = manhattan_distance(current_pos, pursued_pos)
+        dist_from_tom = manhattan_distance(current_pos, pursuer_pos)
         
+        # Emergency escape if Tom is too close
+        if dist_from_tom < 3:
+            directions = np.array([[0,0], [-1, 0], [1, 0], [0, -1], [0, 1],
+                                 [-1, -1], [-1, 1], [1, -1], [1, 1]])
+            safe_moves = []
+            for direction in directions:
+                new_pos = current + direction
+                if (0 <= new_pos[0] < world.shape[0] and 
+                    0 <= new_pos[1] < world.shape[1] and 
+                    world[new_pos[0], new_pos[1]] == 0):
+                    if manhattan_distance(tuple(new_pos), pursuer_pos) > dist_from_tom:
+                        safe_moves.append(direction)
+            if safe_moves:
+                return safe_moves[np.random.choice(len(safe_moves))]
+        
+        # Direct capture opportunity (only if Tom is far enough)
+        if dist_to_spike <= 2 and dist_from_tom > 4:
+            path = a_star_search(world, current_pos, pursued_pos, pursuer_pos)
+            if path and len(path) > 1:
+                next_pos = path[1]
+                return np.array([next_pos[0] - current_pos[0], 
+                               next_pos[1] - current_pos[1]])
+        
+        # Use interception only when Tom is far enough away
+        if dist_from_tom > 4 and PlannerAgent.last_spike_pos is not None:
+            interception_point = find_interception_point(world, current_pos, pursued_pos, pursuer_pos)
+            path = a_star_search(world, current_pos, interception_point, pursuer_pos)
+            if path and len(path) > 1:
+                next_pos = path[1]
+                PlannerAgent.last_spike_pos = pursued_pos
+                PlannerAgent.last_tom_pos = pursuer_pos
+                return np.array([next_pos[0] - current_pos[0], 
+                               next_pos[1] - current_pos[1]])
+        
+        # Standard pursuit with safety awareness
+        path = a_star_search(world, current_pos, pursued_pos, pursuer_pos)
         if path and len(path) > 1:
             next_pos = path[1]
-            action = np.array([next_pos[0] - current_pos[0], 
-                             next_pos[1] - current_pos[1]])
-            
-            # Store position for cycle detection
-            PlannerAgent.last_positions.append(current_pos)
-            if len(PlannerAgent.last_positions) > 5:
-                PlannerAgent.last_positions.pop(0)
-            
-            # Check for cycles
-            if len(PlannerAgent.last_positions) >= 4:
-                if (PlannerAgent.last_positions[-1] == PlannerAgent.last_positions[-3] and 
-                    PlannerAgent.last_positions[-2] == PlannerAgent.last_positions[-4]):
-                    PlannerAgent.cycle_count += 1
-                    if PlannerAgent.cycle_count >= PlannerAgent.max_cycle_count:
-                        # Force a different move to break the cycle
-                        directions = np.array([[0,0], [-1, 0], [1, 0], [0, -1], [0, 1],
-                                             [-1, -1], [-1, 1], [1, -1], [1, 1]])
-                        safe_moves = []
-                        for direction in directions:
-                            new_pos = current + direction
-                            if (0 <= new_pos[0] < world.shape[0] and 
-                                0 <= new_pos[1] < world.shape[1] and 
-                                world[new_pos[0], new_pos[1]] == 0 and
-                                tuple(new_pos) not in PlannerAgent.last_positions[-3:]):
-                                safe_moves.append(direction)
-                        if safe_moves:
-                            PlannerAgent.cycle_count = 0
-                            return safe_moves[np.random.choice(len(safe_moves))]
-                else:
-                    PlannerAgent.cycle_count = 0
-            
-            return action
+            PlannerAgent.last_spike_pos = pursued_pos
+            PlannerAgent.last_tom_pos = pursuer_pos
+            return np.array([next_pos[0] - current_pos[0], 
+                           next_pos[1] - current_pos[1]])
         
-        # Fallback to tactical random move if no path is found
-        directions = np.array([[0,0], [-1, 0], [1, 0], [0, -1], [0, 1],
-                             [-1, -1], [-1, 1], [1, -1], [1, 1]])
-        
-        # Score each possible move
-        move_scores = []
-        for direction in directions:
-            new_pos = current + direction
-            if (0 <= new_pos[0] < world.shape[0] and 
-                0 <= new_pos[1] < world.shape[1] and 
-                world[new_pos[0], new_pos[1]] == 0):
-                # Score based on distance to target and from pursuer
-                score = float(manhattan_distance(tuple(new_pos), pursued_pos) * 0.7 -
-                            manhattan_distance(tuple(new_pos), pursuer_pos) * 0.8)
-                move_scores.append((score, direction))
-        
-        if move_scores:
-            # Choose the move with the best score
-            best_move = min(move_scores, key=lambda x: x[0])
-            return best_move[1]
-        
-        # If no safe moves, stay still
+        # If all else fails, stay still
         return np.array([0, 0])
 
 
