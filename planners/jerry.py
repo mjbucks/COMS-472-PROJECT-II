@@ -1,5 +1,6 @@
 import numpy as np
 import math
+from typing import List, Tuple, Optional, Set, Dict
 
 class Node:
     def __init__(self, pos, g_cost=0, h_cost=0, parent=None):
@@ -19,12 +20,15 @@ class Node:
         return hash(self.pos)
 
 def manhattan_distance(p1, p2):
+    """Calculate Manhattan distance between two points."""
     return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
 
 def euclidean_distance(p1, p2):
+    """Calculate Euclidean distance between two points."""
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 
 def get_neighbors(pos, world):
+    """Get valid neighboring positions."""
     directions = [(-1, 0), (1, 0), (0, -1), (0, 1),  # Cardinal
                  (-1, -1), (-1, 1), (1, -1), (1, 1)]  # Diagonal
     neighbors = []
@@ -37,7 +41,7 @@ def get_neighbors(pos, world):
     return neighbors
 
 def find_escape_paths(world, pos, pursuer, depth=3):
-    """Find potential escape paths considering pursuer's position"""
+    """Find potential escape paths considering pursuer's position."""
     escape_paths = set()
     queue = [(pos, 0)]
     visited = {pos}
@@ -95,7 +99,7 @@ def calculate_heuristic(current, pursued, pursuer, world):
             strategic_score = 2  # Bonus for good strategic position
     
     # Combine all factors
-    return (dist_to_target * 0.7 -  # Minimize distance to target
+    return float(dist_to_target * 0.7 -  # Minimize distance to target
             dist_from_pursuer * 0.8 +  # Maximize distance from pursuer
             safety_penalty * 1.2 -  # Avoid danger
             escape_score * 0.6 +  # Encourage positions with escape routes
@@ -142,10 +146,13 @@ def a_star_search(world, start, pursued, pursuer):
     return None
 
 class PlannerAgent:
+    # Class attributes
+    last_positions = []
+    cycle_count = 0
+    max_cycle_count = 3
+    
     def __init__(self):
-        self.last_positions = []  # Store last few positions to detect cycles
-        self.cycle_count = 0
-        self.max_cycle_count = 3
+        pass
     
     def plan_action(world, current, pursued, pursuer):
         """
@@ -165,8 +172,6 @@ class PlannerAgent:
                              next_pos[1] - current_pos[1]])
             
             # Store position for cycle detection
-            if not hasattr(PlannerAgent, 'last_positions'):
-                PlannerAgent.last_positions = []
             PlannerAgent.last_positions.append(current_pos)
             if len(PlannerAgent.last_positions) > 5:
                 PlannerAgent.last_positions.pop(0)
@@ -208,14 +213,14 @@ class PlannerAgent:
                 0 <= new_pos[1] < world.shape[1] and 
                 world[new_pos[0], new_pos[1]] == 0):
                 # Score based on distance to target and from pursuer
-                score = (manhattan_distance(tuple(new_pos), pursued_pos) * 0.7 -
-                        manhattan_distance(tuple(new_pos), pursuer_pos) * 0.8)
+                score = float(manhattan_distance(tuple(new_pos), pursued_pos) * 0.7 -
+                            manhattan_distance(tuple(new_pos), pursuer_pos) * 0.8)
                 move_scores.append((score, direction))
         
         if move_scores:
             # Choose the move with the best score
-            move_scores.sort(reverse=True)
-            return move_scores[0][1]
+            best_move = min(move_scores, key=lambda x: x[0])
+            return best_move[1]
         
         # If no safe moves, stay still
         return np.array([0, 0])
