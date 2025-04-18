@@ -62,6 +62,19 @@ class PlannerAgent:
 		directions = np.array([[0,0], [-1, 0], [1, 0], [0, -1], [0, 1],
                   	  		   [-1, -1], [-1, 1], [1, -1], [1, 1]]) 
 
-		return directions[np.random.choice(9)]
+		# Ensure start and end positions are tuples of integers
+		start = (int(current[0]), int(current[1]))
+		end = (int(pursued[0]), int(pursued[1]))
+
+		# Convert the numpy array to a list of lists for compatibility with the example DFS function
+		world_list: List[List[int]] = world.tolist()
+
+		# Perform DFS pathfinding and return the result as a numpy array
+		path = dfs(world_list, start, end)
+
+		try:
+			return np.array(path)[1]-current
+		except:
+			return directions[np.random.choice(9)]
 
 
